@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>دی‌بلور پلاک | Blind Motion Deblurring</title>
+<!-- امضای سازنده -->
+<meta name="author" content="مهدی بابایی"/>
+<meta name="email" content="mehdibabaei1378@gmail.com"/>
+<meta name="description" content="سامانه‌ی هوشمند دی‌بلور پلاک خودرو با یادگیری عمیق — توسعه‌یافته توسط مهدی بابایی"/>
+<meta name="copyright" content="مهدی بابایی"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode:'class',
+  theme:{ extend:{
+    colors:{ base:'#070b18', panel:'#0d1428cc', accent:{DEFAULT:'#7c3aed',600:'#7c3aed',400:'#a78bfa'} },
+    boxShadow:{ soft:'0 10px 40px rgba(124,58,237,.20)', glow:'0 0 30px rgba(124,58,237,.35)' },
+    fontFamily:{ sans:['Vazirmatn','system-ui','sans-serif'] }
+  }}
+};
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Vazirmatn',system-ui,sans-serif;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  /* پس‌زمینه متحرک: گوی‌های نورانی */
+  .aurora{position:fixed;inset:0;z-index:-1;overflow:hidden;}
+  .aurora::before,.aurora::after{content:'';position:absolute;width:60vw;height:60vw;border-radius:50%;filter:blur(120px);opacity:.35;animation:float 18s ease-in-out infinite;}
+  .aurora::before{background:#7c3aed;top:-15%;right:-10%;}
+  .aurora::after{background:#2563eb;bottom:-20%;left:-10%;animation-delay:-9s;}
+  @keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(4%,6%) scale(1.1)}}
+
+  /* اسلایدر مقایسه — سمت چپ: بازیافت‌شده · سمت راست: بلور (ورودی)
+     کل منطق بر اساس چپ فیزیکی (left) است تا در RTL هم درست کار کند. */
+  .cmp{position:relative;overflow:hidden;border-radius:1rem;background:#000;cursor:ew-resize;touch-action:none;direction:ltr;}
+  .cmp img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;user-select:none;pointer-events:none;-webkit-user-drag:none;background:#000;}
+  /* لایه‌ی پایه: تصویر بلور (کامل، پشت) — در کل قاب دیده می‌شود */
+  .cmp #cmpBefore{z-index:1;}
+  /* لایه‌ی رویی: تصویر بازیافت‌شده (clip از راست) — فقط سمت چپ هندل دیده می‌شود */
+  .cmp #cmpAfter{z-index:2;clip-path:inset(0 50% 0 0);}
+  .cmp .handle{position:absolute;top:0;bottom:0;width:3px;left:50%;z-index:4;background:linear-gradient(#a78bfa,#7c3aed);box-shadow:0 0 14px rgba(124,58,237,.6);transform:translateX(-50%);pointer-events:none;}
+  .cmp .handle::after{content:'';position:absolute;top:50%;left:50%;width:38px;height:38px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(124,58,237,.4);}
+  .cmp .handle::before{content:'⇄';position:absolute;top:50%;left:50%;z-index:2;color:#7c3aed;font-size:18px;font-weight:bold;transform:translate(-50%,-50%);}
+  .tag{position:absolute;top:10px;z-index:3;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;backdrop-filter:blur(6px);pointer-events:none;}
+  /* سمتی که تصویر واقعاً در آن قرار دارد: بازیافت‌شده در چپ، بلور در راست */
+  .tag-clear{left:10px;background:rgba(34,197,94,.25);color:#bbf7d0;border:1px solid rgba(34,197,94,.4);}
+  .tag-blur{right:10px;background:rgba(239,68,68,.25);color:#fecaca;border:1px solid rgba(239,68,68,.4);}
+
+  /* اسپینر */
+  .spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* انیمیشن پایپ‌لاین */
+  .pl-node{transition:all .4s;}
+  .pl-node.active{transform:scale(1.08);box-shadow:0 0 24px rgba(124,58,237,.6);border-color:#a78bfa !important;}
+  .pl-line{height:2px;background:linear-gradient(90deg,transparent,#7c3aed,transparent);background-size:200% 100%;animation:flow 2s linear infinite;}
+  @keyframes flow{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+  /* متریال کارت */
+  .glass{background:rgba(13,20,40,.7);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.08);}
+  .reveal{opacity:0;transform:translateY(20px);transition:all .6s;}
+  .reveal.in{opacity:1;transform:none;}
+
+  /* سنجش اعداد */
+  .metric-val{font-variant-numeric:tabular-nums;}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:rgba(124,58,237,.4);border-radius:8px}
+  .samp-card{transition:all .25s;}
+  .samp-card:hover{transform:translateY(-4px);box-shadow:0 12px 30px rgba(124,58,237,.3);}
+</style>
+</head>
+<body class="min-h-screen bg-base text-white antialiased">
+<div class="aurora"></div>
+
+<div class="max-w-7xl mx-auto px-4">
+
+  <!-- ============ HEADER ============ -->
+  <header class="flex items-center justify-between gap-3 py-6">
+    <div class="flex items-center gap-3">
+      <div class="w-12 h-12 rounded-2xl bg-accent/20 flex items-center justify-center shadow-glow border border-accent/30">
+        <svg class="w-7 h-7 text-accent-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M3 7h3l2-2h8l2 2h3v12H3z"/><circle cx="12" cy="13" r="4"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">دی‌بلور پلاک</h1>
+        <p class="text-white/50 text-xs md:text-sm mono">Blind Motion Deblurring · Deep Learning</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse"></span>
+      <span id="statusText" class="text-xs text-white/60">در حال اتصال…</span>
+      <a href="/docs" target="_blank" class="hidden sm:inline-block px-3 py-2 rounded-xl glass hover:border-accent/40 transition text-xs">API Docs</a>
+    </div>
+  </header>
+
+  <!-- ============ HERO + PIPELINE ============ -->
+  <section class="text-center py-8 md:py-12 reveal">
+    <div class="inline-block px-4 py-1 rounded-full glass text-xs text-accent-400 mb-4">⚡ سامانه‌ی هوشمند بازیافت پلاک</div>
+    <h2 class="text-3xl md:text-5xl font-extrabold leading-tight no-underline">
+      پلاک‌های <span class="text-white/70">بلور</span> را
+      <span class="bg-gradient-to-l from-accent-400 to-blue-400 bg-clip-text text-transparent">خوانا</span> کن
+    </h2>
+    <p class="mt-4 text-white/60 max-w-2xl mx-auto text-sm md:text-base">
+      یک تصویر از ماشین با پلاک بلور آپلود کن؛ شبکه‌ی عصبی زاویه و طول بلور را تخمین می‌زند و سپس با دی‌کانولوشن وینر، تصویر پلاک را بازیافت می‌کند.
+    </p>
+
+    <!-- پایپ‌لاین بصری -->
+    <div class="mt-8 glass rounded-2xl p-4 md:p-6 max-w-4xl mx-auto">
+      <div class="flex items-center justify-between gap-1 md:gap-2 text-[10px] md:text-xs">
+        <div class="pl-node flex-1 rounded-xl border border-white/10 p-3 bg-black/30" data-node="0">
+          <div class="text-xl mb-1">🖼️</div><div class="text-white/80">تصویر بلور</div>
+        </div>
+        <div class="pl-line flex-1 hidden sm:block"></div>
+        <div class="pl-node flex-1 rounded-xl border border-white/10 p-3 bg-black/30" data-node="1">
+          <div class="text-xl mb-1">〰️</div><div class="text-white/80">طیف FFT</div>
+        </div>
+        <div class="pl-line flex-1 hidden sm:block"></div>
+        <div class="pl-node flex-1 rounded-xl border border-white/10 p-3 bg-black/30" data-node="2">
+          <div class="text-xl mb-1">🧠</div><div class="text-white/80">CNN تشخیص</div>
+        </div>
+        <div class="pl-line flex-1 hidden sm:block"></div>
+        <div class="pl-node flex-1 rounded-xl border border-white/10 p-3 bg-black/30" data-node="3">
+          <div class="text-xl mb-1">✨</div><div class="text-white/80">Wiener</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STUDIO ============ -->
+  <section class="grid xl:grid-cols-5 gap-6 pb-8 reveal">
+    <!-- ستون چپ: آپلود + کنترل‌ها + گالری نمونه -->
+    <div class="xl:col-span-2 space-y-6">
+      <!-- آپلود -->
+      <div class="glass rounded-2xl p-5 shadow-soft">
+        <h3 class="font-bold mb-3 flex items-center gap-2"><span class="text-accent-400">①</span> آپلود تصویر</h3>
+        <div id="dropzone" class="border-2 border-dashed border-white/15 hover:border-accent/60 rounded-2xl p-7 flex flex-col items-center justify-center text-center cursor-pointer transition group">
+          <svg class="w-12 h-12 mb-3 text-accent-400 group-hover:scale-110 transition" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M12 16V4m0 0L8 8m4-4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+          </svg>
+          <p class="text-white/80 text-sm">فایل را بکش و رها کن یا <span class="text-accent-400 underline">کلیک</span> کن</p>
+          <p class="text-white/40 text-xs mt-1">JPG / PNG · حداکثر ۱۵MB</p>
+          <input id="fileInput" type="file" accept="image/jpeg,image/png,image/*" class="hidden"/>
+        </div>
+
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button id="processBtn" class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-l from-accent to-blue-500 hover:opacity-90 transition font-semibold disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+            <span id="spin" class="spinner hidden"></span><span id="btnText">دی‌بلور کن ✨</span>
+          </button>
+          <button id="clearBtn" class="px-4 py-3 rounded-xl glass hover:border-white/30 transition">پاک‌سازی</button>
+        </div>
+        <p id="toast" class="mt-3 text-sm min-h-[20px]"></p>
+      </div>
+
+      <!-- گالری نمونه -->
+      <div class="glass rounded-2xl p-5">
+        <h3 class="font-bold mb-3 flex items-center gap-2"><span class="text-accent-400">★</span> نمونه‌های آماده</h3>
+        <div id="samplesGrid" class="grid grid-cols-3 gap-3">
+          <div class="col-span-3 text-white/40 text-xs text-center py-4">در حال بارگذاری نمونه‌ها…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ستون راست: اسلایدر مقایسه + داشبورد -->
+    <div class="xl:col-span-3 space-y-6">
+      <!-- اسلایدر مقایسه -->
+      <div class="glass rounded-2xl p-5 shadow-soft">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-bold flex items-center gap-2"><span class="text-accent-400">②</span> مقایسه قبل / بعد</h3>
+          <span class="text-xs text-white/40">برای جابه‌جایی مرز، بکشید · ← →</span>
+        </div>
+        <div id="cmp" class="cmp w-full aspect-[4/3] border border-white/5">
+          <img id="cmpAfter" alt="deblurred"/>
+          <img id="cmpBefore" alt="blurry"/>
+          <span class="tag tag-clear">✨ بازیافت‌شده</span>
+          <span class="tag tag-blur">🌫️ بلور (ورودی)</span>
+          <div id="cmpHandle" class="handle"></div>
+          <div id="cmpPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center text-white/30 text-sm pointer-events-none">
+            <div class="text-4xl mb-2">🚗</div>پس از آپلود، نتیجه اینجا نمایش داده می‌شود
+          </div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2 items-center">
+          <a id="downloadBtn" class="px-4 py-2 rounded-xl bg-green-500/20 text-green-300 hover:bg-green-500/30 transition hidden flex items-center gap-2" download="deblurred.jpg">
+            ⬇ دانلود خروجی
+          </a>
+          <button id="autoBtn" class="px-4 py-2 rounded-xl glass hover:border-accent/40 transition text-sm hidden">▶ اسکن خودکار</button>
+        </div>
+      </div>
+
+      <!-- داشبورد پارامترها -->
+      <div class="glass rounded-2xl p-5">
+        <h3 class="font-bold mb-4 flex items-center gap-2"><span class="text-accent-400">③</span> داشبورد تحلیل</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div class="bg-black/40 rounded-xl p-3 border border-white/10 text-center">
+            <div class="text-[10px] text-white/50 mb-1">زاویه بلور</div>
+            <div id="mAngle" class="text-2xl font-extrabold metric-val text-accent-400">—</div>
+            <div class="text-[10px] text-white/40">درجه</div>
+          </div>
+          <div class="bg-black/40 rounded-xl p-3 border border-white/10 text-center">
+            <div class="text-[10px] text-white/50 mb-1">طول بلور</div>
+            <div id="mLength" class="text-2xl font-extrabold metric-val text-blue-400">—</div>
+            <div class="text-[10px] text-white/40">پیکسل</div>
+          </div>
+          <div class="bg-black/40 rounded-xl p-3 border border-white/10 text-center">
+            <div class="text-[10px] text-white/50 mb-1">زمان پردازش</div>
+            <div id="mTime" class="text-2xl font-extrabold metric-val text-emerald-400">—</div>
+            <div class="text-[10px] text-white/40">میلی‌ثانیه</div>
+          </div>
+          <div class="bg-black/40 rounded-xl p-3 border border-white/10 text-center">
+            <div class="text-[10px] text-white/50 mb-1">ابعاد ورودی</div>
+            <div id="mSize" class="text-lg font-extrabold metric-val text-pink-400">—</div>
+            <div class="text-[10px] text-white/40">پیکسل</div>
+          </div>
+        </div>
+
+        <!-- تصاویر میان‌فرآیندی -->
+        <div class="grid grid-cols-3 gap-3">
+          <div class="text-center">
+            <div class="text-[10px] text-white/50 mb-1">طیف فرکانسی FFT</div>
+            <img id="fftImg" class="w-full aspect-square object-cover rounded-lg bg-black/60 border border-white/10"/>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-white/50 mb-1">PSF تخمین‌زده‌شده</div>
+            <img id="psfImg" class="w-full aspect-square object-cover rounded-lg bg-black/60 border border-white/10"/>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-white/50 mb-1">خروجی نهایی</div>
+            <img id="outThumb" class="w-full aspect-square object-cover rounded-lg bg-black/60 border border-white/10"/>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section class="py-10 reveal">
+    <h3 class="text-center text-2xl font-extrabold mb-2">چطور کار می‌کند؟</h3>
+    <p class="text-center text-white/50 text-sm mb-8">پشت پرده‌ی این ابزار دقیقاً همان کد و مدل‌های پروژه‌اند</p>
+    <div class="grid md:grid-cols-3 gap-5">
+      <div class="glass rounded-2xl p-6">
+        <div class="w-12 h-12 rounded-xl bg-accent/20 flex items-center justify-center mb-3 text-2xl">〰️</div>
+        <h4 class="font-bold mb-2">تحلیل فرکانسی</h4>
+        <p class="text-white/60 text-sm leading-7">از تبدیل فوریه‌ی سریع (FFT) تصویر، امضای فرکانسی بلور حرکتی استخراج می‌شود؛ خطوط تیره‌ی متقارن، جهت و شدت بلور را لو می‌دهند.</p>
+      </div>
+      <div class="glass rounded-2xl p-6">
+        <div class="w-12 h-12 rounded-xl bg-accent/20 flex items-center justify-center mb-3 text-2xl">🧠</div>
+        <h4 class="font-bold mb-2">شبکه‌ی عصبی CNN</h4>
+        <p class="text-white/60 text-sm leading-7">دو مدل MiniVGG (یکی برای زاویه با softmax، یکی برای طول با رگرسیون) که روی هزاران نمونه‌ی بلور آموزش دیده‌اند، پارامترهای PSF را پیش‌بینی می‌کنند.</p>
+      </div>
+      <div class="glass rounded-2xl p-6">
+        <div class="w-12 h-12 rounded-xl bg-accent/20 flex items-center justify-center mb-3 text-2xl">✨</div>
+        <h4 class="font-bold mb-2">دی‌کانولوشن وینر</h4>
+        <p class="text-white/60 text-sm leading-7">با PSF تخمین‌زده‌شده، فیلتر وینر در حوزه‌ی فرکانس اعمال می‌شود تا اثر بلور برگردانده شده و جزئیات پلاک دوباره خوانا شوند.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ABOUT / SIGNATURE ============ -->
+  <section class="py-10 reveal">
+    <div class="glass rounded-3xl p-8 md:p-10 max-w-3xl mx-auto text-center relative overflow-hidden">
+      <!-- درخشش پس‌زمینه -->
+      <div class="absolute -top-20 -right-20 w-60 h-60 bg-accent/10 rounded-full blur-3xl"></div>
+      <div class="absolute -bottom-20 -left-20 w-60 h-60 bg-blue-500/10 rounded-full blur-3xl"></div>
+
+      <div class="relative">
+        <div class="inline-block px-4 py-1.5 rounded-full bg-gradient-to-l from-accent/25 to-blue-500/25 text-accent-300 text-xs font-semibold mb-5 border border-accent/30">🎨 توسعه‌دهنده و سازنده</div>
+        <h3 class="text-3xl md:text-4xl font-extrabold bg-gradient-to-l from-white via-accent-200 to-blue-300 bg-clip-text text-transparent">مهدی بابایی</h3>
+        <p class="text-accent-300/80 text-sm mt-2 mono tracking-wide" dir="ltr">mehdibabaei1378@gmail.com</p>
+
+        <p class="text-base md:text-lg mt-6 leading-9 max-w-xl mx-auto text-white/80">
+          این سامانه‌ی هوشمند بازیافت پلاک، شامل <span class="text-accent-300 font-semibold">طراحی رابط کاربری</span>، <span class="text-blue-300 font-semibold">پیاده‌سازی بک‌اند</span> و <span class="text-emerald-300 font-semibold">یکپارچه‌سازی مدل‌های یادگیری عمیق</span>،
+          توسط <span class="text-white font-bold text-lg">مهدی بابایی</span> توسعه و اجرا شده است.
+        </p>
+
+        <!-- امضای استایل‌دهی‌شده -->
+        <div class="mt-7 flex items-center justify-center gap-3 flex-wrap">
+          <a href="mailto:mehdibabaei1378@gmail.com" class="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-accent/30 border border-white/10 hover:border-accent/50 transition flex items-center gap-2 text-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path d="M3 7l9 6 9-6M3 7v10a2 2 0 002 2h14a2 2 0 002-2V7M3 7l2-2"/></svg>
+            تماس با سازنده
+          </a>
+          <button onclick="navigator.clipboard.writeText('mehdibabaei1378@gmail.com');this.textContent='کپی شد ✓'" class="px-5 py-2.5 rounded-xl glass hover:border-white/30 transition text-sm flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg>
+            کپی ایمیل
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="py-8 border-t border-white/5">
+    <div class="flex flex-col md:flex-row items-center justify-between gap-3 text-xs">
+      <p class="text-white/40">
+        © <span id="year"></span> <span class="text-white/70 font-semibold">مهدی بابایی</span> — تمام حقوق محفوظ است
+      </p>
+      <p class="text-white/40 flex items-center gap-2">
+        <a href="mailto:mehdibabaei1378@gmail.com" class="hover:text-accent-400 transition mono" dir="ltr">mehdibabaei1378@gmail.com</a>
+      </p>
+      <p class="text-white/40">FastAPI · TensorFlow · Wiener Deconvolution</p>
+    </div>
+  </footer>
+</div>
+
+<script>
+/* =================== state =================== */
+let currentFile = null, comparePct = 50, autoTimer = null;
+
+/* =================== elements =================== */
+const $ = id => document.getElementById(id);
+const fileInput=$('fileInput'), dropzone=$('dropzone');
+const processBtn=$('processBtn'), clearBtn=$('clearBtn'), downloadBtn=$('downloadBtn'), autoBtn=$('autoBtn');
+const toast=$('toast'), spin=$('spin'), btnText=$('btnText');
+const cmpWrap=$('cmp'), cmpBefore=$('cmpBefore'), cmpAfter=$('cmpAfter'), cmpHandle=$('cmpHandle');
+const cmpPlaceholder=$('cmpPlaceholder');
+const mAngle=$('mAngle'), mLength=$('mLength'), mTime=$('mTime'), mSize=$('mSize');
+const fftImg=$('fftImg'), psfImg=$('psfImg'), outThumb=$('outThumb');
+const plNodes=document.querySelectorAll('.pl-node');
+
+/* =================== helpers =================== */
+function notify(t, ty='info'){ const c={ok:'text-green-400',warn:'text-yellow-400',err:'text-red-400',info:'text-white/60'}[ty]; toast.textContent=t; toast.className='mt-3 text-sm '+(c||''); }
+function setLoading(s){ spin.classList.toggle('hidden',!s); btnText.textContent=s?'در حال پردازش…':'دی‌بلور کن ✨'; processBtn.disabled=s||!currentFile; }
+function setCompare(p){ comparePct=Math.max(0,Math.min(100,+p)); cmpAfter.style.clipPath=`inset(0 ${100-comparePct}% 0 0)`; cmpHandle.style.left=comparePct+'%'; }
+function hidePlaceholder(h){ cmpPlaceholder.style.display=h?'none':'flex'; }
+function resetOutput(){
+  ['cmpAfter','fftImg','psfImg','outThumb'].forEach(id=>$(id).removeAttribute('src'));
+  downloadBtn.classList.add('hidden'); autoBtn.classList.add('hidden');
+  hidePlaceholder(false); setCompare(50);
+  mAngle.textContent=mLength.textContent=mTime.textContent=mSize.textContent='—';
+}
+
+/* انیمیشن پایپ‌لاین */
+function runPipelineAnim(){
+  plNodes.forEach(n=>n.classList.remove('active'));
+  let i=0;
+  const iv=setInterval(()=>{ if(i>0) plNodes[i-1].classList.remove('active'); if(i<plNodes.length){ plNodes[i].classList.add('active'); i++; } else clearInterval(iv); }, 350);
+}
+
+/* =================== file handling =================== */
+function setFile(f, label){
+  if(!f) return;
+  currentFile=f;
+  const url=URL.createObjectURL(f);
+  cmpBefore.src=url; hidePlaceholder(true);
+  processBtn.disabled=false; resetOutput();
+  cmpBefore.src=url;
+  notify(label||'فایل آماده است. «دی‌بلور کن» را بزن.','ok');
+}
+dropzone.addEventListener('click',()=>fileInput.click());
+dropzone.addEventListener('dragover',e=>{e.preventDefault();dropzone.classList.add('border-accent/60','bg-accent/5');});
+dropzone.addEventListener('dragleave',()=>dropzone.classList.remove('border-accent/60','bg-accent/5'));
+dropzone.addEventListener('drop',e=>{e.preventDefault();dropzone.classList.remove('border-accent/60','bg-accent/5');const f=e.dataTransfer.files[0]; if(f) setFile(f);});
+fileInput.addEventListener('change',e=>{const f=e.target.files[0]; if(f) setFile(f);});
+
+/* =================== process =================== */
+processBtn.addEventListener('click', async ()=>{
+  if(!currentFile) return notify('ابتدا یک تصویر انتخاب کن.','warn');
+  setLoading(true); runPipelineAnim();
+  try{
+    const fd=new FormData(); fd.append('file',currentFile);
+    const res=await fetch('/api/deblur/full',{method:'POST',body:fd});
+    const j=await res.json();
+    if(!res.ok) throw new Error(j.detail||'خطای ناشناخته');
+
+    cmpAfter.src=j.output_b64;
+    fftImg.src=j.fft_b64; psfImg.src=j.psf_b64; outThumb.src=j.output_b64;
+    downloadBtn.href=j.output_b64; downloadBtn.classList.remove('hidden');
+    autoBtn.classList.remove('hidden');
+    setCompare(55);
+    mAngle.textContent=j.angle; mLength.textContent=j.length;
+    mTime.textContent=j.processing_ms;
+    mSize.textContent=j.shape.width+'×'+j.shape.height;
+    animateMetric(mAngle,0,j.angle,700); animateMetric(mLength,0,j.length,700); animateMetric(mTime,0,j.processing_ms,700);
+    notify('تمام شد ✅ پلاک بازیافت شد.','ok');
+  }catch(err){ console.error(err); notify('خطا: '+err.message,'err'); }
+  finally{ setLoading(false); }
+});
+
+function animateMetric(el,from,to,ms){
+  const start=performance.now(), step=now=>{
+    const t=Math.min(1,(now-start)/ms);
+    el.textContent=Math.round(from+(to-from)*t);
+    if(t<1) requestAnimationFrame(step); else el.textContent=to;
+  };
+  requestAnimationFrame(step);
+}
+
+clearBtn.addEventListener('click',()=>{ currentFile=null; fileInput.value=''; cmpBefore.removeAttribute('src'); resetOutput(); processBtn.disabled=true; notify('پاک شد.','info'); });
+
+/* =================== compare slider ===================
+   layout (چپ فیزیکی، مستقل از RTL):
+   - تصویر بلور      = لایه‌ی پایه (کامل، پشت)
+   - تصویر بازیافت‌  = لایه‌ی رویی، فقط سمت چپ هندل دیده می‌شود
+   - هندل در {comparePct}% از چپ قرار می‌گیرد؛ کشیدنش مقدار را تغییر می‌دهد.
+*/
+const pctFromEvent = e => {
+  const r = cmpWrap.getBoundingClientRect();
+  const x = (e.touches ? e.touches[0].clientX : e.clientX);
+  return Math.max(0, Math.min(100, (x - r.left) / r.width * 100));
+};
+let dragging = false;
+const startDrag = e => { dragging = true; setCompare(pctFromEvent(e)); e.preventDefault(); };
+const moveDrag  = e => { if (dragging) { setCompare(pctFromEvent(e)); e.preventDefault(); } };
+const endDrag   = () => { dragging = false; };
+
+/* ماوس */
+cmpWrap.addEventListener('mousedown', startDrag);
+window.addEventListener('mousemove', moveDrag);
+window.addEventListener('mouseup', endDrag);
+/* لمسی */
+cmpWrap.addEventListener('touchstart', startDrag, {passive:false});
+window.addEventListener('touchmove', moveDrag, {passive:false});
+window.addEventListener('touchend', endDrag);
+window.addEventListener('keydown',e=>{ if(e.key==='ArrowLeft') setCompare(comparePct-5); if(e.key==='ArrowRight') setCompare(comparePct+5); });
+
+/* اسکن خودکار */
+autoBtn.addEventListener('click',()=>{
+  if(autoTimer){ clearInterval(autoTimer); autoTimer=null; autoBtn.textContent='▶ اسکن خودکار'; return; }
+  autoBtn.textContent='⏸ توقف'; let dir=1;
+  autoTimer=setInterval(()=>{ let p=comparePct+2*dir; if(p>=100){p=100;dir=-1;} if(p<=0){p=0;dir=1;} setCompare(p); },40);
+});
+
+/* =================== samples =================== */
+async function loadSamples(){
+  try{
+    const res=await fetch('/api/samples'); const j=await res.json();
+    const grid=$('samplesGrid');
+    if(!j.samples.length){ grid.innerHTML='<div class="col-span-3 text-white/40 text-xs text-center py-4">نمونه‌ای موجود نیست</div>'; return; }
+    grid.innerHTML='';
+    j.samples.forEach(async s=>{
+      const card=document.createElement('button');
+      card.className='samp-card relative rounded-xl overflow-hidden border border-white/10 bg-black/40 aspect-square cursor-pointer';
+      card.innerHTML=`<img src="/api/samples/${s.id}" class="w-full h-full object-cover opacity-80 hover:opacity-100 transition"/><div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent p-1 text-[9px] text-center">${s.name}</div>`;
+      card.addEventListener('click',async()=>{
+        notify('در حال بارگذاری نمونه…','info');
+        const r=await fetch(`/api/samples/${s.id}`); const blob=await r.blob();
+        setFile(new File([blob], s.name, {type:blob.type}), 'نمونه بارگذاری شد. «دی‌بلور کن» را بزن.');
+      });
+      grid.appendChild(card);
+    });
+  }catch(e){ $('samplesGrid').innerHTML='<div class="col-span-3 text-white/40 text-xs text-center py-4">بارگذاری نمونه‌ها ناموفق بود</div>'; }
+}
+
+/* =================== health =================== */
+async function checkHealth(){
+  try{
+    const res=await fetch('/api/health'); const j=await res.json();
+    if(j.status==='ok'){ $('statusDot').className='w-2.5 h-2.5 rounded-full bg-green-400'; $('statusText').textContent='مدل آماده'; $('statusText').className='text-xs text-green-400'; }
+  }catch(e){ $('statusDot').className='w-2.5 h-2.5 rounded-full bg-red-400'; $('statusText').textContent='خطای اتصال'; }
+}
+
+/* =================== reveal on scroll =================== */
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in');}),{threshold:.1});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+/* =================== init =================== */
+setCompare(50); checkHealth(); loadSamples();
+$('year').textContent = new Date().getFullYear();
+</script>
+</body>
+</html>
